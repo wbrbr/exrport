@@ -4,6 +4,7 @@
 #include <OpenEXR/ImathBox.h>
 #include <assert.h>
 #include <memory>
+#include <filesystem>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -21,9 +22,15 @@ float clamp(float x) {
 }
 
 float linearToSRGB(float u) {
-    return u <= 0.0031308f
-           ? 12.92f * u
-           : 1.0055f * powf(u, 1.f/2.4f) - 0.055f;
+    if (u > 1.f) {
+        return 1.f;
+    } else if (u < 0.f) {
+        return 0.f;
+    } else if (u < 0.0031308f) {
+        return 12.92f * u;
+    } else {
+        return 1.055f * powf(u, 0.41666f) - 0.055f;
+    }
 }
 
 int main(int argc, char** argv)
@@ -34,6 +41,9 @@ int main(int argc, char** argv)
     }
 
     Imf::RgbaInputFile input(argv[1]);
+    float exposure = std::stof(argv[3]);
+    float multiplier = powf(2, exposure);
+
     Imath::Box2i box = input.dataWindow();
     assert(box.min == Imath::V2i(0,0));
 
@@ -41,17 +51,17 @@ int main(int argc, char** argv)
     int height = box.max.y+1;
 
     std::vector<Imf::Rgba> buf;
-    buf.resize(width * height);
+    buf.resize((size_t)(width * height));
 
-    input.setFrameBuffer(buf.data(), 1, width);
+    input.setFrameBuffer(buf.data(), 1, (size_t)width);
     input.readPixels(0, height-1);
 
     std::vector<unsigned char> byte_buf;
     byte_buf.reserve(buf.size()*4);
     for (Imf::Rgba px : buf) {
-        unsigned char r = (unsigned char)(linearToSRGB(clamp(px.r)) * 255.99f);
-        unsigned char g = (unsigned char)(linearToSRGB(clamp(px.g)) * 255.99f);
-        unsigned char b = (unsigned char)(linearToSRGB(clamp(px.b)) * 255.99f);
+        unsigned char r = (unsigned char)(linearToSRGB(px.r*multiplier) * 255.99f);
+        unsigned char g = (unsigned char)(linearToSRGB(px.g*multiplier) * 255.99f);
+        unsigned char b = (unsigned char)(linearToSRGB(px.b*multiplier) * 255.99f);
         unsigned char a = (unsigned char)(clamp(px.a) * 255.99f);
         byte_buf.push_back(r);
         byte_buf.push_back(g);
@@ -59,7 +69,17 @@ int main(int argc, char** argv)
         byte_buf.push_back(a);
     }
 
-    stbi_write_png(argv[2], width, height, 4, byte_buf.data(), 0);
+    std::string extension = std::filesystem::path(argv[2]).extension();
+    if (extension == ".png") {
+        stbi_write_png(argv[2], width, height, 4, byte_buf.data(), 0);
+    } else if (extension == ".jpg") {
+        stbi_write_jpg(argv[2], width, height, 4, byte_buf.data(), 80);
+    } else if (extension == ".tga") {
+        stbi_write_tga(argv[2], width, height, 4, byte_buf.data());
+    } else {
+        std::cerr << "Unknown image format: " << extension << std::endl;
+        exit(1);
+    }
 
     return 0;
 }
